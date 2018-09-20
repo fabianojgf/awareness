@@ -7,15 +7,19 @@ import android.content.IntentFilter;
 import android.support.annotation.NonNull;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.Toast;
 
 import com.google.android.gms.awareness.Awareness;
-import com.google.android.gms.awareness.FenceClient;
 import com.google.android.gms.awareness.SnapshotClient;
 import com.google.android.gms.awareness.fence.AwarenessFence;
 import com.google.android.gms.awareness.fence.DetectedActivityFence;
+import com.google.android.gms.awareness.fence.FenceQueryRequest;
+import com.google.android.gms.awareness.fence.FenceQueryResult;
+import com.google.android.gms.awareness.fence.FenceState;
+import com.google.android.gms.awareness.fence.FenceStateMap;
 import com.google.android.gms.awareness.fence.FenceUpdateRequest;
 import com.google.android.gms.awareness.fence.HeadphoneFence;
 import com.google.android.gms.awareness.snapshot.HeadphoneStateResponse;
@@ -24,21 +28,31 @@ import com.google.android.gms.awareness.snapshot.PlacesResponse;
 import com.google.android.gms.awareness.snapshot.WeatherResponse;
 import com.google.android.gms.awareness.state.HeadphoneState;
 import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.gms.common.api.ResultCallback;
+import com.google.android.gms.common.api.ResultCallbacks;
+import com.google.android.gms.common.api.Status;
 import com.google.android.gms.location.places.PlaceLikelihood;
-import com.google.android.gms.tasks.OnCompleteListener;
 import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
-import com.google.android.gms.tasks.Task;
 
+import java.util.Arrays;
+import java.util.Date;
 import java.util.List;
 
-import great.ufc.br.awarenessclass.actions.ToastAction;
-import great.ufc.br.awarenessclass.actions.VibrateAction;
+import great.ufc.br.awarenessclass.actions.HeadphoneFenceReceiver;
+import great.ufc.br.awarenessclass.actions.WalkingFenceReceiver;
+import great.ufc.br.awarenessclass.actions.WalkingHeadphoneFenceReceiver;
 
 public class MainActivity extends AppCompatActivity {
     // Declare variables for pending intent and fence receiver.
-    private String FENCE_RECEIVER_ACTION = "FENCE_RECEIVER_ACTION";
-    private PendingIntent myPendingIntent;
+    private String HEADPHONE_FENCE_RECEIVER_ACTION = "HEADPHONE_FENCE_RECEIVER_ACTION";
+    private String WALKING_FENCE_RECEIVER_ACTION = "WALKING_FENCE_RECEIVER_ACTION";
+    private String WALKING_HEADPHONE_FENCE_RECEIVER_ACTION = "WALKING_HEADPHONE_FENCE_RECEIVER_ACTION";
+
+    private GoogleApiClient mGoogleApiClient;
+    private HeadphoneFenceReceiver headphoneReceiver;
+    private WalkingFenceReceiver walkingReceiver;
+    private WalkingHeadphoneFenceReceiver walkingHeadphoneReceiver;
 
     Button btnHeadphoneSnapshot;
     Button btnLocationSnapshot;
@@ -46,6 +60,44 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        mGoogleApiClient = new GoogleApiClient.Builder(this)
+                .addApi(Awareness.API)
+                .build();
+        mGoogleApiClient.connect();
+
+
+		Intent headphoneIntent = new Intent(HEADPHONE_FENCE_RECEIVER_ACTION);
+		PendingIntent headphonePendingIntent = PendingIntent.getBroadcast(this, 0, headphoneIntent, 0);
+		// Registering the receiver
+		headphoneReceiver = new HeadphoneFenceReceiver();
+		registerReceiver(headphoneReceiver, new IntentFilter(HEADPHONE_FENCE_RECEIVER_ACTION));
+		// Create a fence for Headphone.
+		AwarenessFence headphoneFence = HeadphoneFence.during(HeadphoneState.PLUGGED_IN);
+		// Register a fence for Headphone.
+		registerFence(headphonePendingIntent,"headphoneFence", headphoneFence);
+
+
+        Intent walkingIntent = new Intent(WALKING_FENCE_RECEIVER_ACTION);
+        PendingIntent walkingPendingIntent = PendingIntent.getBroadcast(this, 2, walkingIntent, 0);
+        // Registering the receiver
+        walkingReceiver = new WalkingFenceReceiver();
+        registerReceiver(walkingReceiver, new IntentFilter(WALKING_FENCE_RECEIVER_ACTION));
+        // Create a fence for User Walking.
+        AwarenessFence walkingFence = DetectedActivityFence.during(DetectedActivityFence.WALKING);
+        // Register a fence for Headphone.
+        registerFence(walkingPendingIntent,"walkingFence", walkingFence);
+
+
+		Intent walkingHeadPhoneIntent = new Intent(WALKING_HEADPHONE_FENCE_RECEIVER_ACTION);
+		PendingIntent walkingHeadPhonePendingIntent = PendingIntent.getBroadcast(this, 2, walkingHeadPhoneIntent, 0);
+		// Registering the receiver
+		walkingHeadphoneReceiver = new WalkingHeadphoneFenceReceiver();
+		registerReceiver(walkingHeadphoneReceiver, new IntentFilter(WALKING_HEADPHONE_FENCE_RECEIVER_ACTION));
+		// Create a fence for User Walking with Headphone.
+		AwarenessFence walkingHeadPhoneFence = AwarenessFence.and(walkingFence, headphoneFence);
+		// Register a fence for Headphone.
+		registerFence(walkingHeadPhonePendingIntent,"walkingHeadPhoneFence", walkingHeadPhoneFence);
 
         btnHeadphoneSnapshot = findViewById(R.id.btnHeadphoneSnapshot);
         btnLocationSnapshot = findViewById(R.id.btnLocationSnapshot);
@@ -63,34 +115,6 @@ public class MainActivity extends AppCompatActivity {
                 startPlacesSnapshot();
             }
         });
-
-        //Fence
-
-        //Criar as AwarenessFences
-        AwarenessFence headphone = HeadphoneFence.during(HeadphoneState.PLUGGED_IN);
-
-        //Filtros de Intent
-        IntentFilter hp = new IntentFilter("headphone");
-        //Registrar Receivers (actions) na pilha do Android
-        registerReceiver(new ToastAction(), hp);
-        //Registrar PendingIntents getBroadcast com os filtros criados
-        PendingIntent pi = PendingIntent.getBroadcast(this,123,new Intent("headphone"),PendingIntent.FLAG_CANCEL_CURRENT);
-        //Registro de Fences no Google Awareness API
-        FenceClient fc = Awareness.getFenceClient(this);
-        fc.updateFences(new FenceUpdateRequest.Builder().addFence("Headphone",headphone,pi).build());
-
-        //Criar as AwarenessFences
-        AwarenessFence walkingFence = DetectedActivityFence.during(DetectedActivityFence.WALKING);
-
-        //Filtros de Intent
-        IntentFilter hp2 = new IntentFilter("walking");
-        //Registrar Receivers (actions) na pilha do Android
-        registerReceiver(new VibrateAction(), hp2);
-        //Registrar PendingIntents getBroadcast com os filtros criados
-        PendingIntent pi2 = PendingIntent.getBroadcast(this,123, new Intent("walking"),PendingIntent.FLAG_CANCEL_CURRENT);
-        //Registro de Fences no Google Awareness API
-        FenceClient fc2 = Awareness.getFenceClient(this);
-        fc.updateFences(new FenceUpdateRequest.Builder().addFence("walking", walkingFence, pi2).build());
     }
 
     @SuppressLint("MissingPermission")
@@ -174,5 +198,67 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(MainActivity.this, e.getMessage(), Toast.LENGTH_SHORT).show();
             }
         });
+    }
+
+    protected void registerFence(final PendingIntent pendingIntent, final String fenceKey, final AwarenessFence fence) {
+        Awareness.FenceApi.updateFences(
+                mGoogleApiClient,
+                new FenceUpdateRequest.Builder()
+                        .addFence(fenceKey, fence, pendingIntent)
+                        .build())
+                .setResultCallback(new ResultCallback<Status>() {
+                    @Override
+                    public void onResult(@NonNull Status status) {
+                        if(status.isSuccess()) {
+                            Log.i(android.content.ContentValues.TAG, "Fence was successfully registered.");
+                            queryFence(fenceKey);
+                        } else {
+                            Log.e(android.content.ContentValues.TAG, "Fence could not be registered: " + status);
+                        }
+                    }
+                });
+    }
+
+    protected void unregisterFence(final String fenceKey) {
+        Awareness.FenceApi.updateFences(
+                mGoogleApiClient,
+                new FenceUpdateRequest.Builder()
+                        .removeFence(fenceKey)
+                        .build()).setResultCallback(
+                                new ResultCallbacks<Status>() {
+            @Override
+            public void onSuccess(@NonNull Status status) {
+                Log.i(android.content.ContentValues.TAG, "Fence " + fenceKey + " successfully removed.");
+            }
+
+            @Override
+            public void onFailure(@NonNull Status status) {
+                Log.i(android.content.ContentValues.TAG, "Fence " + fenceKey + " could NOT be removed.");
+            }
+        });
+    }
+
+    protected void queryFence(final String fenceKey) {
+        Awareness.FenceApi.queryFences(mGoogleApiClient,
+                FenceQueryRequest.forFences(Arrays.asList(fenceKey)))
+                .setResultCallback(new ResultCallback<FenceQueryResult>() {
+                    @Override
+                    public void onResult(@NonNull FenceQueryResult fenceQueryResult) {
+                        if (!fenceQueryResult.getStatus().isSuccess()) {
+                            Log.e(android.content.ContentValues.TAG, "Could not query fence: " + fenceKey);
+                            return;
+                        }
+                        FenceStateMap map = fenceQueryResult.getFenceStateMap();
+                        for (String fenceKey : map.getFenceKeys()) {
+                            FenceState fenceState = map.getFenceState(fenceKey);
+                            Log.i(android.content.ContentValues.TAG, "Fence " + fenceKey + ": "
+                                    + fenceState.getCurrentState()
+                                    + ", was="
+                                    + fenceState.getPreviousState()
+                                    + ", lastUpdateTime="
+                                    + new Date(fenceState.getLastFenceUpdateTimeMillis()));
+                        }
+                    }
+                });
     }
 }
